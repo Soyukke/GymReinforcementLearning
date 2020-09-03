@@ -2,3 +2,9 @@ name = "GymReinforcementLearning"
 uuid = "5f25b2e3-2eb1-400c-bc5f-ae2545ce16bc"
 authors = ["Soyukke"]
 version = "0.1.0"
+
+[deps]
+Conda = "8f4d0f93-b110-5947-807f-2305c1781a2d"
+PyCall = "438e738f-606a-5dbb-bf0a-cddfbfd45ab0"
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
