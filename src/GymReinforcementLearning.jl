@@ -5,6 +5,8 @@ export low, high, n_state_features
 export decide_action, execute_action
 export main
 
+include("dqn.jl")
+
 using PyCall
 using Conda
 
@@ -90,19 +92,29 @@ function decide_action(q::QLearning, state::Vector)
     # sに対応する行を取得
     qs = [q(state, 0), q(state, 1), q(state, 2)]
     # ϵ-greedy法
-    # ϵ = 0.3
-    # if rand() < ϵ
-    #     @info "random action"
-    #     return rand(0:naction-1)
-    # else
-    #     return argmax(qs) - 1
-    # end
+    ϵ = 0.3
+    if rand() < ϵ
+        return rand(0:naction-1)
+    else
+        return argmax(qs) - 1
+    end
 
     # greedy
-    return argmax(qs) - 1
+    # return argmax(qs) - 1
 
     # softmax法
-    # return argmax(qs / sum(exp.(qs)))
+    # @show qs
+    # @show exp.(qs)
+    # qs = exp.(qs) / sum(exp.(qs))
+    # x = rand()
+    # @show x, sum(qs)
+    # if x <= qs[1]
+    #     return 0
+    # elseif x <= sum(qs[1:2])
+    #     return 1
+    # elseif x <= sum(qs)
+    #     return 2
+    # end
 end
 
 """
@@ -119,11 +131,11 @@ function execute_action(q::QLearning, s1, r1, action)
     # Q-Matrixを更新するs
     Q1 = q(s1, action)
     maxQ2 = maximum([q(s2, 0), q(s2, 1), q(s2, 2)])
-    γ = 0.9
-    α = 0.4
+    γ = 0.99
+    α = 0.2
     # qmat更新
     q.qmat[indices(q, s1, action)...] += α * (r1 + γ*maxQ2 - Q1)
-    return s2, r2, done
+    return s2, r2, done, info
 end
 
 function Gym()
@@ -214,16 +226,25 @@ function main()
     env = initenv(gym)
     q = QLearning(env)
     try
-        for i in 1:1000
+        for i in 1:10000
             @info i
             s0 = reset(q.env)
             s = copy(s0)
             r = 0
+            cnt = 0
             while true
-                render(q.env)
+                cnt += 1
+                # if 300 < i
+                #     render(q.env)
+                # end
                 a = decide_action(q, s)
-                s, r, done = execute_action(q, s, r, a)
+                s, r, done ,info = execute_action(q, s, r, a)
                 if done
+                    if cnt < 200
+                        @info "成功"
+                    else
+                        @info "失敗"
+                    end
                     break
                 end
             end
