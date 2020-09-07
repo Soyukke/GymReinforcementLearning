@@ -1,6 +1,8 @@
 using Flux
-import Flux.@functor
-export DQNetwork, loss, run_episode
+using Random
+import Flux.@functor, Flux.onehotbatch
+import Statistics.mean, Statistics.std
+export DQNetwork, loss, run_episode, dqnmain
 """
 DQNネットワーク
 """
@@ -36,13 +38,13 @@ T(s, a) -> s'
 l = Q(s, a) -  R(s) + max_p Q(s', p)
 L = (1/2) * l^2
 """
-function loss(q::DQNetwork)
-    batch_size = 10
-    state = rand(q.nstatetype, batch_size)
-    # (naction, batch_size)
-    qa = q.model(state)
-    # 最大値 max Q(s, a)を取得する
-end
+# function loss(q::DQNetwork)
+#     batch_size = 10
+#     state = rand(q.nstatetype, batch_size)
+#     # (naction, batch_size)
+#     qa = q.model(state)
+#     # 最大値 max Q(s, a)を取得する
+# end
 
 function qs(q::DQNetwork, s::Vector{Float32})
     predicts = q.model(s)
@@ -95,17 +97,22 @@ end
 1エピソード実行する
 ペアでデータを保持しておく: s_i, a_i, R(s_i), max_p Q(s_{i+1}, p)
 """
-function run_episode(dqn::DQNetwork)
+function run_episode(dqn::DQNetwork; is_render=false)
     gym = Gym()
     env = initenv(gym)
     s0 = Float32.(reset(env))
     data = []
+    r0 = 0
     while true
+        if is_render
+            render(env)
+        end
         qs0 = qs(dqn, s0)
         a0 = argmax(qs0)
-        r0 = 0
+        # ε-greedy
+        a_actual = rand() < 0.3 ? rand(1:3) : a0
         maxq0 = qs0[a0]
-        s1, r1, done, info = step(env, a0)
+        s1, r1, done, info = step(env, a_actual-1)
         s1 = Float32.(s1)
         if done
             break
@@ -114,12 +121,13 @@ function run_episode(dqn::DQNetwork)
         a1 = argmax(qs1)
         maxq1 = qs1[a1]
         # 学習に必要なパラメータ
-        record = [s0, a0, r0, maxq1]
+        record = [s0, a_actual, r0, maxq1]
         push!(data, record)
         # 更新する
         s0 = s1
         r0 = r1
     end
+    close(env)
     return data
 end
 
@@ -142,4 +150,43 @@ model(s_i)の出力をa_iでmaskし，以下の損失関数を計算する
 L = (1/2) * (R(s_i) + γ * max_p Q(s_{i+1}, p) - Q(s_i, a_i))^2
 """
 function dqnmain()
+    γ::Float32 = 0.9
+    naction = 3
+    dqn = DQNetwork()
+    ps = params(dqn)
+    opt = ADAM(1e-4)
+    function loss(x, a, y)
+        return L = mean((1f0/2.0f0) * (dqn.model(x).*a - y).^2)
+    end
+    for i in 1:2000
+        isrender = 1000 < i
+        data = run_episode(dqn, is_render=false)
+        # 入力と学習データを作詞絵する
+        state_list = map(record->record[begin], data)
+        states = reduce(hcat, state_list)
+        μ = mean(states)
+        σ = std(states)
+        states = (states .- μ) / σ
+
+        action_list = map(record->record[begin+1], data)
+        # onehot行列でmask用行列
+        actions = onehotbatch(action_list, 1:3)
+        # max_p Q(s, p)の予測値
+        q_s1_a1 = dqn.model(states) .* actions
+        # (R(s) + max_p Q(s_{i+1}, p)) - Q(s, a)
+        q_s2_p = Float32.(reduce(hcat, map(record->record[end], data)))
+        r_s1 = Float32.(reduce(hcat, map(record->record[end-1], data)))
+        # 教師データ
+        y_matrix = repeat(r_s1 + γ*q_s2_p, naction)
+        # normalize
+        μ = mean(y_matrix)
+        σ = std(y_matrix)
+        y_matrix = (y_matrix .- μ) / σ
+        # 学習データはこんな感じで用意する
+        traindata = zip((states, ), (actions, ), (y_matrix, ))
+        # L = mean((1f0/2.0f0) * (q_s1_a1 - repeat(r_s1 + γ*q_s2_p, naction)).^2)
+        Flux.train!(loss, ps, traindata, opt)
+        l = loss(states, actions, y_matrix)
+        @info i size(states, 2), l
+    end
 end

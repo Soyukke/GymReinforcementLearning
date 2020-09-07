@@ -2,7 +2,7 @@
 
 ## 環境
 
-- Julia 1.3.1
+- Julia 1.5.1
 
 gymインストール．
 ```julia
