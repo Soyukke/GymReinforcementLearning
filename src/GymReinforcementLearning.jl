@@ -5,7 +5,6 @@ export low, high, n_state_features
 export decide_action, execute_action
 export main
 
-include("dqn.jl")
 
 using PyCall
 using Conda
@@ -40,6 +39,9 @@ struct QLearning
     env::Environment
     qmat::Array
 end
+
+# DQN
+include("dqn.jl")
 
 """
 環境情報から行列を初期化する
@@ -155,7 +157,9 @@ end
 [座標, 速度]
 """
 function initenv(s::Gym)
-    env = s.gym.make("MountainCar-v0")
+    cartpole = "CartPole-v1"
+    mountaincar = "MountainCar-v0"
+    env = s.gym.make(cartpole)
     return Environment(env)
 end
 

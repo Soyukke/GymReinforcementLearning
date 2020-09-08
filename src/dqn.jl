@@ -1,14 +1,20 @@
 using Flux
+using Flux.Data
 using Random
 import Flux.@functor, Flux.onehotbatch
 import Statistics.mean, Statistics.std
-export DQNetwork, loss, run_episode, dqnmain
+import Base.Iterators.partition
+export DQNetwork, loss, run_episode, dqnmain, huber_loss
+
+include("replay.jl")
+
 """
 DQNネットワーク
 """
 struct DQNetwork
     nstatetype::Integer
     naction::Integer
+    env::Environment
     model 
 end
 @functor DQNetwork
@@ -17,18 +23,24 @@ end
 Deep Q-Networkインスタンス作成
 DQNモデル
 s -> Q(s, a1), Q(s, a2), Q(s, a3)
+## 状態ベクトルの次元数
+nstate_type
+## 行動の種類
+nation
 """
-function DQNetwork()
-    # 状態ベクトルの次元数
-    nstate_type = 2
-    # 行動の種類
-    naction = 3
+function DQNetwork(env::Environment)
+    obs = observation_space(env)
+    action = action_space(env)
+    nstate_type = n_state_features(obs)
+    naction = n_action(action)
+    @show nstate_type, naction
+
     model = Chain(
         Dense(nstate_type, 32, relu),
         Dense(32, 128, relu),
         Dense(128, naction)
     )
-    return DQNetwork(nstate_type, naction, model)
+    return DQNetwork(nstate_type, naction, env, model)
 end
 
 """
@@ -98,8 +110,7 @@ end
 ペアでデータを保持しておく: s_i, a_i, R(s_i), max_p Q(s_{i+1}, p)
 """
 function run_episode(dqn::DQNetwork; is_render=false)
-    gym = Gym()
-    env = initenv(gym)
+    env = dqn.env
     s0 = Float32.(reset(env))
     data = []
     r0 = 0
@@ -110,7 +121,7 @@ function run_episode(dqn::DQNetwork; is_render=false)
         qs0 = qs(dqn, s0)
         a0 = argmax(qs0)
         # ε-greedy
-        a_actual = rand() < 0.3 ? rand(1:3) : a0
+        a_actual = rand() < 0.1 ? rand(range(1, stop=dqn.naction)) : a0
         maxq0 = qs0[a0]
         s1, r1, done, info = step(env, a_actual-1)
         s1 = Float32.(s1)
@@ -127,8 +138,17 @@ function run_episode(dqn::DQNetwork; is_render=false)
         s0 = s1
         r0 = r1
     end
-    close(env)
     return data
+end
+
+function huber_loss(x::Number)
+    x = Float32(x)
+    δ::Float32 = 1
+    if abs(x) ≤ δ
+        return 0.5f0 * x^2
+    else
+        return δ * (abs(x) - 0.5f0 * x)
+    end
 end
 
 """
@@ -151,42 +171,80 @@ L = (1/2) * (R(s_i) + γ * max_p Q(s_{i+1}, p) - Q(s_i, a_i))^2
 """
 function dqnmain()
     γ::Float32 = 0.9
-    naction = 3
-    dqn = DQNetwork()
+    gym = Gym()
+    env = initenv(gym)
+    dqn = DQNetwork(env)
     ps = params(dqn)
-    opt = ADAM(1e-4)
+    opt = ADAM(1e-3)
+    minibatchsize = 500
     function loss(x, a, y)
-        return L = mean((1f0/2.0f0) * (dqn.model(x).*a - y).^2)
+        return L = mean((1f0/2.0f0) * huber_loss.(dqn.model(x).*a - y))
     end
-    for i in 1:2000
-        isrender = 1000 < i
-        data = run_episode(dqn, is_render=false)
-        # 入力と学習データを作詞絵する
-        state_list = map(record->record[begin], data)
-        states = reduce(hcat, state_list)
-        μ = mean(states)
-        σ = std(states)
-        states = (states .- μ) / σ
+    # function loss(x)
+    #     @show size(x)
+    #     # return L = mean((1f0/2.0f0) * huber_loss.(dqn.model(x).*a - y))
+    # end
 
-        action_list = map(record->record[begin+1], data)
-        # onehot行列でmask用行列
-        actions = onehotbatch(action_list, 1:3)
-        # max_p Q(s, p)の予測値
-        q_s1_a1 = dqn.model(states) .* actions
-        # (R(s) + max_p Q(s_{i+1}, p)) - Q(s, a)
-        q_s2_p = Float32.(reduce(hcat, map(record->record[end], data)))
-        r_s1 = Float32.(reduce(hcat, map(record->record[end-1], data)))
-        # 教師データ
-        y_matrix = repeat(r_s1 + γ*q_s2_p, naction)
-        # normalize
-        μ = mean(y_matrix)
-        σ = std(y_matrix)
-        y_matrix = (y_matrix .- μ) / σ
-        # 学習データはこんな感じで用意する
-        traindata = zip((states, ), (actions, ), (y_matrix, ))
-        # L = mean((1f0/2.0f0) * (q_s1_a1 - repeat(r_s1 + γ*q_s2_p, naction)).^2)
-        Flux.train!(loss, ps, traindata, opt)
-        l = loss(states, actions, y_matrix)
-        @info i size(states, 2), l
+    try
+        isrender = false
+        for i in 1:1000
+            # data = run_episode(dqn, is_render=false)
+            # ReplayBufferにためる
+            # buffer
+            replaydata = ReplayBuffer()
+            isendreplay = true
+            # 平均継続数
+            meantime = 0
+            numdata = 0
+            while isendreplay
+                data = run_episode(dqn, is_render=isrender)
+                meantime += length(data)
+                numdata += 1
+                for record in data
+                    isendreplay = add_record(replaydata, record)
+                    !isendreplay && break
+                end
+            end
+            meantime /= numdata
+
+            data = replaydata.data
+            @assert length(data) == replaydata.maxsize
+            # 入力と学習データを作詞絵する
+            state_list = map(record->record[begin], data)
+            states = reduce(hcat, state_list)
+            # μ = mean(states)
+            # σ = std(states)
+            # states = (states .- μ) / σ
+
+            action_list = map(record->record[begin+1], data)
+            # onehot行列でmask用行列
+            actions = onehotbatch(action_list, range(1, stop=dqn.naction))
+            # max_p Q(s, p)の予測値
+            q_s1_a1 = dqn.model(states) .* actions
+            # (R(s) + max_p Q(s_{i+1}, p)) - Q(s, a)
+            q_s2_p = Float32.(reduce(hcat, map(record->record[end], data)))
+            println(q_s2_p[begin])
+            r_s1 = Float32.(reduce(hcat, map(record->record[end-1], data)))
+            # 教師データ
+            y_matrix = repeat(r_s1 + γ*q_s2_p, dqn.naction)
+            # normalize
+            # μ = mean(y_matrix)
+            # σ = std(y_matrix)
+            # y_matrix = (y_matrix .- μ) / σ
+            indices_shuffled = randperm(replaydata.maxsize)
+            @show size(states), size(actions), size(y_matrix)
+            traindata = (states, actions, y_matrix)
+            traindata = DataLoader(traindata, batchsize=minibatchsize, shuffle=true)
+
+            # 学習データはこんな感じで用意する
+            # traindata = zip((states, ), (actions, ), (y_matrix, ))
+            # L = mean((1f0/2.0f0) * (q_s1_a1 - repeat(r_s1 + γ*q_s2_p, naction)).^2)
+            Flux.train!(loss, ps, traindata, opt)
+            l = loss(states, actions, y_matrix)
+            @info i size(states, 2), l, meantime
+        end
+    catch e
+        print(e)
+        close(env)
     end
 end
