@@ -111,7 +111,7 @@ end
 1エピソード実行する
 ペアでデータを保持しておく: s_i, a_i, R(s_i), max_p Q(s_{i+1}, p)
 """
-function run_episode(dqn::DQNetwork; is_render=false)
+function run_episode(dqn::DQNetwork; is_render=false, ϵ=0.3)
     env = dqn.env
     s0 = Float32.(reset(env))
     data = []
@@ -124,7 +124,7 @@ function run_episode(dqn::DQNetwork; is_render=false)
         qs0 = qs(dqn, s0)
         a0 = argmax(qs0)
         # ε-greedy
-        a_actual = rand() < 0.3 ? rand(range(1, stop=dqn.naction)) : a0
+        a_actual = rand() < ϵ ? rand(range(1, stop=dqn.naction)) : a0
         maxq0 = qs0[a0]
         # 倒立: 0, こけたら以降-1, 195ステップ以降で0が続いていたら1にする
         # 既存設定は倒立状態で+1
@@ -132,27 +132,23 @@ function run_episode(dqn::DQNetwork; is_render=false)
         # clipping
         if done
             if t ≤ 195
-                r1 = Float32(-1)
-                # 倒れたらs1の状態0?
-                # s1 = zeros(Float32, dqn.nstatetype)
+                r0 = Float32(-1)
+                # 倒れたらs1の状態0．次状態はない
+                s1 = zeros(Float32, dqn.nstatetype)
             # else
             #     r1 = Float32(1)
             end
         elseif 195 ≤ t
-            r1 = 1
+            # 195をこえたら報酬1を与える
+            r0 = 1
         else
             # たっている
-            r1 = Float32(0)
+            r0 = Float32(0)
         end
         islimitkey = "TimeLimit.truncated"
         # 既定のステップ数を超えた場合，trueになる
         islimit = haskey(info, islimitkey) && !info[islimitkey]
-        # @info r1, done, islimit
-        # @info r1, done, info
-        # 既定のステップ数を超えたら終了する
-        if islimit
-            break
-        end
+        # doneか既定のステップ数を超えたら終了する
         qs1 = qs(dqn, s1)
         a1 = argmax(qs1)
         maxq1 = qs1[a1]
@@ -161,9 +157,13 @@ function run_episode(dqn::DQNetwork; is_render=false)
         # 次の状態の最大価値は，都度計算する
         record = [s0, a_actual, r0, s1]
         push!(data, record)
+
+        if done || islimit
+            break
+        end
+
         # 更新する
         s0 = s1
-        r0 = r1
         t += 1
     end
     return data
@@ -254,7 +254,8 @@ function dqnmain()
     `r1`は状態`s1`における報酬で，`s2`は`s1`で行動`a`を実行するときの遷移後の状態である．
     """
     function loss(s1, a, s2, r1)
-        γ = 0.99f0
+        # HACK ここを小さくしたら発散しなくなり，学習がうまくいくようになった．学習率を小さくしてもよいかも
+        γ = 0.8f0
         # r1 + γ * max_p Q(s2, p) ≃ Q(s1, a1)
         # 最大値のところだけ1のmatrixでmaskする
         # また，勾配計算をしない
@@ -285,8 +286,8 @@ function dqnmain()
             numdata = 0
             cnt = 1
             while isendreplay
-                isrender = (cnt == 1)
-                data = run_episode(dqn, is_render=isrender)
+                # isrender = (cnt == 1)
+                data = run_episode(dqn)
                 meantime += length(data)
                 numdata += 1
                 for record in data
@@ -332,6 +333,8 @@ function dqnmain()
             # l = loss(states, actions, y_matrix)
             l = loss(states, actions, states2, rewards1)
             @info i size(states, 2), l, meantime
+            # 学習後にϵ = 0で実行
+            data = run_episode(dqn, is_render=true, ϵ=0)
         end
     catch e
         close(env)
