@@ -47,7 +47,7 @@ include("dqn.jl")
 環境情報から行列を初期化する
 行列サイズ (離散状態1数, 離散状態2数, ..., 行動数)
 """
-function QLearning(env; nstep=3)
+function QLearning(env; nstep=10)
     obs = observation_space(env)
     act = action_space(env)
     naction = n_action(act)
@@ -76,7 +76,6 @@ function indices(q::QLearning, state, a)
     idx_state = ceil.(Int, state_normal / step)
     # 0の場合は0となるので1にする
     idx_state = [max(x, 1) for x in idx_state]
-    @show a
     return [idx_state..., a+1]
 end
 
@@ -128,19 +127,31 @@ end
 
 return s2, r2, done
 """
-function execute_action(q::QLearning, s1, r1, action)
+function execute_action(q::QLearning, s1, r1, action; t=0)
     # 変化前の状態sで行動aをとったときのQ(s, a)を更新する
     s2, r2, done, info = step(q.env, action)
     # 変化後の状態s'からmax_p Q(s', p)を取得して，Q(s, a)を更新する
     # @info s2, reward, done, info
     # Q-Matrixを更新するs
     Q1 = q(s1, action)
-    maxQ2 = maximum([q(s2, i) for i in 1:size(q.qmat)[end]])
-    γ = 0.8
+    maxQ2 = maximum([q(s2, i) for i in 0:size(q.qmat)[end]-1])
+    γ = 0.99
     α = 0.2
+    # r1書き換え
+    r1 = re_reward(done, t)
     # qmat更新
     q.qmat[indices(q, s1, action)...] += α * (r1 + γ*maxQ2 - Q1)
     return s2, r2, done, info
+end
+
+"""
+報酬を計算
+"""
+function re_reward(done::Bool, t::Integer)
+    if 195 < t
+        return 1
+    end
+    return done ? -1 : 0
 end
 
 function Gym()
@@ -211,33 +222,29 @@ function main()
     gym = Gym()
     env = initenv(gym)
     q = QLearning(env)
-    # try
+    try
         for i in 1:10000
             @info i
             s0 = reset(q.env)
             s = copy(s0)
             r = 0
-            cnt = 0
+            t = 0
             while true
-                cnt += 1
-                # if 300 < i
-                #     render(q.env)
-                # end
+                t += 1
+                if 3000 < i
+                    render(q.env)
+                end
                 a = decide_action(q, s)
-                s, r, done ,info = execute_action(q, s, r, a)
+                s, r, done ,info = execute_action(q, s, r, a, t=t)
                 if done
-                    if cnt < 200
-                        @info "成功"
-                    else
-                        @info "失敗"
-                    end
                     break
                 end
             end
         end
-    # catch e
-        # print(e)
-    # end
+    catch e
+        close(q.env)
+        throw(e)
+    end
     close(env)
 end
 
