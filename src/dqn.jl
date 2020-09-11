@@ -44,21 +44,6 @@ function DQNetwork(env::Environment)
     return DQNetwork(nstate_type, naction, env, model)
 end
 
-"""
-loss function
-損失関数
-T(s, a) -> s'
-l = Q(s, a) -  R(s) + max_p Q(s', p)
-L = (1/2) * l^2
-"""
-# function loss(q::DQNetwork)
-#     batch_size = 10
-#     state = rand(q.nstatetype, batch_size)
-#     # (naction, batch_size)
-#     qa = q.model(state)
-#     # 最大値 max Q(s, a)を取得する
-# end
-
 function qs(q::DQNetwork, s::Vector{T}) where T <: Number
     s = Float32.(s)
     predicts = q.model(s)
@@ -66,50 +51,19 @@ function qs(q::DQNetwork, s::Vector{T}) where T <: Number
 end
 
 """
-行動aを選択する
-"""
-function action(q::DQNetwork, s::Vector{Float32})::Integer
-    # 行動a
-    a = argmax(qs(q, s))
-    return a
-end
-
-"""
-行動aを選択する
-"""
-function actions(q::DQNetwork)::Vector{Integer}
-    batch_size = 10
-    state = rand(q.nstatetype, batch_size)
-    # (naction, batch_size)
-    qs = q.model(state)
-    # 行動a
-    as = argmaxs(qs)
-    return as
-end
-
-"""
 行列`m`の縦方向ごとに見て，argmaxを計算する
-# Examples
-m
-```
-3×10 Array{Float32,2}:
- -0.0407064  -0.0679783  -0.0769743  -0.0316168   -0.0605061  -0.00688636  -0.07329     -0.0785109  -0.0417965  -0.0376177
- -0.0545554  -0.0453474  -0.0330656   0.00389661  -0.0515486  -0.00836701  -0.00768139  -0.0179061  -0.0526757  -0.05496
-  0.189985    0.281258    0.261014    0.0419651    0.275313    0.0175994    0.144541     0.197473    0.211431    0.162823
-````
-出力
-```julia
-1×10 Array{Int64,2}:
- 3  3  3  3  3  3  3  3  3  3
-end
 """
 function argmaxs(m::Matrix{T})::Vector{Integer} where T <: Number
     return mapslices(argmax, m, dims=1)[1, :]
 end
 
 """
+run_episode(dqn::DQNetwork; is_render=false, ϵ=0.3)
+
 1エピソード実行する
-ペアでデータを保持しておく: s_i, a_i, R(s_i), max_p Q(s_{i+1}, p)
+ペアでデータを保持しておく: s_i, a_i, R(s_i), s_{i+1}
+`dqn`のパラメータを使用してϵ-greedy法で実行する．そのときの`ϵ`のデフォルト値が0.3で，
+`is_render`が`true`の場合に実行結果をrenderする．デフォルトは`false`
 """
 function run_episode(dqn::DQNetwork; is_render=false, ϵ=0.3)
     env = dqn.env
@@ -220,8 +174,6 @@ function maxvalues(m::Matrix{T})::Matrix{T} where T <: Number
 end
 @nograd maxvalues
 
-
-
 """
 DQNの実行流れ
 # Simulation step
@@ -256,29 +208,18 @@ function dqnmain()
     function loss(s1, a, s2, r1)
         # HACK ここを小さくしたら発散しなくなり，学習がうまくいくようになった．学習率を小さくしてもよいかも
         γ = 0.8f0
-        # r1 + γ * max_p Q(s2, p) ≃ Q(s1, a1)
-        # 最大値のところだけ1のmatrixでmaskする
-        # また，勾配計算をしない
+        # maxqはnograd
         maxq = maxvalues(dqn.model(s2))
-        # @show size(r1), size(maxq)
         y = r1 + γ .* maxq
         Y = repeat(y, dqn.naction) .* a
         X = dqn.model(s1).*a
         return L = mean((1f0/2.0f0) * huber_loss.(X - Y))
     end
 
-
-    # function loss(x)
-    #     @show size(x)
-    #     # return L = mean((1f0/2.0f0) * huber_loss.(dqn.model(x).*a - y))
-    # end
-
     try
         isrender = false
         for i in 1:1000
-            # data = run_episode(dqn, is_render=false)
-            # ReplayBufferにためる
-            # buffer
+            # replaybufferに10000ステップ分のデータをためる
             replaydata = ReplayBuffer()
             isendreplay = true
             # 平均継続数
@@ -300,40 +241,18 @@ function dqnmain()
 
             data = replaydata.data
             @assert length(data) == replaydata.maxsize
-            # 入力と学習データを作詞絵する
             state_list = map(record->record[begin], data)
             states = reduce(hcat, state_list)
-            # μ = mean(states)
-            # σ = std(states)
-            # states = (states .- μ) / σ
-
             action_list = map(record->record[begin+1], data)
-            # onehot行列でmask用行列
             actions = onehotbatch(action_list, range(1, stop=dqn.naction))
-            # max_p Q(s, p)の予測値
-            # q_s1_a1 = dqn.model(states) .* actions
-            # (R(s) + max_p Q(s_{i+1}, p)) - Q(s, a)
             states2 = Float32.(reduce(hcat, map(record->record[end], data)))
             rewards1 = Float32.(reduce(hcat, map(record->record[end-1], data)))
-            # 教師データ
-            # y_matrix = repeat(r_s1 + γ*q_s2_p, dqn.naction)
-            # normalize
-            # μ = mean(y_matrix)
-            # σ = std(y_matrix)
-            # y_matrix = (y_matrix .- μ) / σ
-            @show size(states), size(actions)
-            # traindata = (states, actions, y_matrix)
             traindata = (states, actions, states2, rewards1)
             traindata = DataLoader(traindata, batchsize=minibatchsize, shuffle=true)
-
-            # 学習データはこんな感じで用意する
-            # traindata = zip((states, ), (actions, ), (y_matrix, ))
-            # L = mean((1f0/2.0f0) * (q_s1_a1 - repeat(r_s1 + γ*q_s2_p, naction)).^2)
             Flux.train!(loss, ps, traindata, opt)
-            # l = loss(states, actions, y_matrix)
             l = loss(states, actions, states2, rewards1)
             @info i size(states, 2), l, meantime
-            # 学習後にϵ = 0で実行
+            # 毎ステップ学習後にϵ = 0で実行して描画する
             data = run_episode(dqn, is_render=true, ϵ=0)
         end
     catch e

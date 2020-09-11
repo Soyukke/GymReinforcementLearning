@@ -47,7 +47,7 @@ include("dqn.jl")
 環境情報から行列を初期化する
 行列サイズ (離散状態1数, 離散状態2数, ..., 行動数)
 """
-function QLearning(env; nstep=20)
+function QLearning(env; nstep=3)
     obs = observation_space(env)
     act = action_space(env)
     naction = n_action(act)
@@ -74,6 +74,9 @@ function indices(q::QLearning, state, a)
     # 刻み幅
     step = 1/nstep
     idx_state = ceil.(Int, state_normal / step)
+    # 0の場合は0となるので1にする
+    idx_state = [max(x, 1) for x in idx_state]
+    @show a
     return [idx_state..., a+1]
 end
 
@@ -92,7 +95,7 @@ Actionを決定する
 function decide_action(q::QLearning, state::Vector)
     naction = action_space(q.env) |> n_action
     # sに対応する行を取得
-    qs = [q(state, 0), q(state, 1), q(state, 2)]
+    qs = [q(state, i) for i in 0:naction-1]
     # ϵ-greedy法
     ϵ = 0.3
     if rand() < ϵ
@@ -132,8 +135,8 @@ function execute_action(q::QLearning, s1, r1, action)
     # @info s2, reward, done, info
     # Q-Matrixを更新するs
     Q1 = q(s1, action)
-    maxQ2 = maximum([q(s2, 0), q(s2, 1), q(s2, 2)])
-    γ = 0.99
+    maxQ2 = maximum([q(s2, i) for i in 1:size(q.qmat)[end]])
+    γ = 0.8
     α = 0.2
     # qmat更新
     q.qmat[indices(q, s1, action)...] += α * (r1 + γ*maxQ2 - Q1)
@@ -161,27 +164,6 @@ function initenv(s::Gym)
     mountaincar = "MountainCar-v0"
     env = s.gym.make(cartpole)
     return Environment(env)
-end
-
-"""
-報酬を評価する
-"""
-function calculate_reward()
-end
-
-"""
-状態sで行動aを取った後の状態s'が不明な問題の場合
-行動価値関数Q(s, a)
-状態sで行動aをとったときに得られる将来を加味した報酬
-R(s')はアルゴリズムで計算できるとする
-R(s') + γ max[Q(s', a')]
-## 入力
-状態sにおける報酬r, 状態s, 行動a, 遷移後状態s'
-
-## 出力
-
-"""
-function Q()
 end
 
 """
@@ -229,7 +211,7 @@ function main()
     gym = Gym()
     env = initenv(gym)
     q = QLearning(env)
-    try
+    # try
         for i in 1:10000
             @info i
             s0 = reset(q.env)
@@ -253,9 +235,9 @@ function main()
                 end
             end
         end
-    catch e
-        print(e)
-    end
+    # catch e
+        # print(e)
+    # end
     close(env)
 end
 
