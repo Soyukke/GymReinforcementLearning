@@ -1,8 +1,8 @@
 # JuliaでGym
 
-## 環境
+## 環境 (wsl2)
 
-- Julia 1.5.1
+- Julia 1.6.0
 
 gymインストール．
 ```julia
@@ -43,6 +43,8 @@ DQNを実行する．
 ```julia
 dqnmain()
 ```
+
+![](examples/output.gif)
 
 
 
