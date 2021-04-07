@@ -235,7 +235,7 @@ function main()
                     render(q.env)
                 end
                 a = decide_action(q, s)
-                s, r, done, info = execute_action(q, s, r, a, t=t)
+                s, r, done ,info = execute_action(q, s, r, a, t=t)
                 if done
                     break
                 end
